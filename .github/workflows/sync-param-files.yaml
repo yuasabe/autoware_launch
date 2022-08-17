@@ -16,6 +16,11 @@ jobs:
           app_id: ${{ secrets.APP_ID }}
           private_key: ${{ secrets.PRIVATE_KEY }}
 
+      - name: Generate sync-param-files.yaml
+        run: |
+          git clone https://github.com/autowarefoundation/autoware.universe.git /tmp/autoware.universe
+          python3 generate_sync_param_files.py
+
       - name: Run sync-files
         uses: autowarefoundation/autoware-github-actions/sync-files@v1
         with:
