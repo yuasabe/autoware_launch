@@ -1,0 +1,175 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<launch>
+  <!-- Essential parameters -->
+  <arg name="map_path" description="point cloud and lanelet2 map directory path"/>
+  <arg name="vehicle_model" description="vehicle model name"/>
+  <arg name="sensor_model" description="sensor model name"/>
+
+  <!-- Optional parameters -->
+  <!-- Map -->
+  <arg name="lanelet2_map_file" default="lanelet2_map.osm" description="lanelet2 map file name"/>
+  <arg name="pointcloud_map_file" default="pointcloud_map.pcd" description="pointcloud map file name"/>
+  <!-- Control -->
+  <!-- Vehicle -->
+  <arg name="launch_vehicle_interface" default="false"/>
+  <!-- System -->
+  <arg name="launch_system_monitor" default="false" description="launch system monitor"/>
+  <arg name="launch_dummy_diag_publisher" default="false" description="launch dummy diag publisher"/>
+  <!-- Tools -->
+  <arg name="rviz" default="true" description="launch rviz"/>
+  <arg name="rviz_config" default="$(find-pkg-share autoware_launch)/rviz/autoware.rviz" description="rviz config"/>
+
+  <!-- Vehicle -->
+
+  <!-- vehicle description -->
+  <group>
+    <arg name="model_file" default="$(find-pkg-share tier4_vehicle_launch)/urdf/vehicle.xacro" description="path to the file of model settings (*.xacro)"/>
+    <arg name="config_dir" default="$(find-pkg-share individual_params)/config/default/$(var sensor_model)"/>
+    <node name="robot_state_publisher" pkg="robot_state_publisher" exec="robot_state_publisher">
+      <param name="robot_description" value="$(command 'xacro $(var model_file) vehicle_model:=$(var vehicle_model) sensor_model:=$(var sensor_model) config_dir:=$(var config_dir)' 'warn')"/>
+    </node>
+  </group>
+
+  <!-- vehicle interface -->
+  <!-- No Vehicle Interface -->
+
+  <!-- Map -->
+  <group>
+    <push-ros-namespace namespace="map"/>
+
+    <!-- map_loader::map_hash_generator -->
+    <node name="map_hash_generator" pkg="map_loader" exec="map_hash_generator">
+      <param name="lanelet2_map_path" value="$(var map_path)/$(var lanelet2_map_file)" />
+      <param name="pointcloud_map_path" value="$(var map_path)/$(var pointcloud_map_file)" />
+    </node>
+
+    <!-- map_container -->
+    <node_container pkg="rclcpp_components" exec="component_container" name="map_container" namespace="">
+
+      <!-- map_loader::Lanelet2MapLoaderNode -->
+      <composable_node pkg="map_loader" plugin="Lanelet2MapLoaderNode" name="lanelet2_map_loader" namespace="">
+        <remap from="output/lanelet2_map" to="vector_map" />
+        <param name="lanelet2_map_path" value="$(var map_path)/$(var lanelet2_map_file)" />
+        <param from="$(find-pkg-share autoware_launch)/config/map/lanelet2_map_loader.param.yaml" />
+        <extra_arg name="use_intra_process_comms" value="false" />
+      </composable_node>
+
+      <!-- map_loader::Lanelet2MapVisualizationNode -->
+      <composable_node pkg="map_loader" plugin="Lanelet2MapVisualizationNode" name="lanelet2_map_visualization" namespace="">
+        <remap from="input/lanelet2_map" to="vector_map" />
+        <remap from="output/lanelet2_map_marker" to="vector_map_marker" />
+        <param name="lanelet2_map_path" value="$(var map_path)/$(var lanelet2_map_file)" />
+        <param from="$(find-pkg-share autoware_launch)/config/map/lanelet2_map_loader.param.yaml" />
+        <extra_arg name="use_intra_process_comms" value="false" />
+      </composable_node>
+
+      <!-- map_loader::PointCloudMapLoaderNode -->
+      <composable_node pkg="map_loader" plugin="PointCloudMapLoaderNode" name="pointcloud_map_loader" namespace="">
+        <remap from="output/pointcloud_map" to="pointcloud_map" />
+        <remap from="service/get_partial_pcd_map" to="/map/get_partial_pointcloud_map" />
+        <remap from="service/get_differential_pcd_map" to="/map/get_differential_pointcloud_map" />
+        <param name="pcd_paths_or_directory" value="[$(var map_path)/$(var pointcloud_map_file)]" />
+        <param from="$(find-pkg-share autoware_launch)/config/map/pointcloud_map_loader.param.yaml" />
+        <extra_arg name="use_intra_process_comms" value="false" />
+      </composable_node>
+
+      <!-- map_tf_generator::VectorMapTFGeneratorNode -->
+      <composable_node pkg="map_tf_generator" plugin="VectorMapTFGeneratorNode" name="vector_map_tf_generator" namespace="">
+        <param name="map_frame" value="map" />
+        <param name="viewer_frame" value="viewer" />
+        <extra_arg name="use_intra_process_comms" value="false" />
+      </composable_node>
+      
+    </node_container>
+
+  </group> <!-- map -->
+
+  <!-- Sensing -->
+  <group>
+    <push-ros-namespace namespace="sensing"/>
+    <let name="sensor_launch_pkg" value="$(find-pkg-share $(var sensor_model)_launch)"/>
+    
+    <!-- LiDAR -->
+    <group>
+      <push-ros-namespace namespace="lidar/top"/>
+      
+      <!-- pointcloud_container -->
+      <node_container pkg="rclcpp_components" exec="component_container" name="pointcloud_container" namespace="">
+
+        <!-- pointcloud_preprocessor::CropBoxFilterComponent -->
+        <composable_node pkg="pointcloud_preprocessor" plugin="pointcloud_preprocessor::CropBoxFilterComponent" name="crop_box_filter_self" namespace="">
+          <remap from="input" to="pointcloud_raw_ex" />
+          <remap from="output" to="self_cropped/pointcloud_ex" />
+          <param name="min_x" value="-0.5" />
+          <param name="max_x" value="1.7" />
+          <param name="min_y" value="-0.72" />
+          <param name="max_y" value="0.92" />
+          <param name="min_z" value="0.0" />
+          <param name="max_z" value="2.5" />
+          <param name="input_frame" value="base_link" />
+          <param name="output_frame" value="base_link" />
+          <extra_arg name="use_intra_process_comms" value="false" />
+        </composable_node>
+
+        <!-- pointcloud_preprocessor::DistortionCorrectorComponent -->
+        <composable_node pkg="pointcloud_preprocessor" plugin="pointcloud_preprocessor::DistortionCorrectorComponent" name="distortion_corrector_node" namespace="">
+          <remap from="~/input/twist" to="/sensing/vehicle_velocity_converter/twist_with_covariance" />
+          <remap from="~/input/imu" to="/sensing/imu/imu_data" />
+          <remap from="~/input/pointcloud" to="self_cropped/pointcloud_ex" />
+          <remap from="~/output/pointcloud" to="rectified/pointcloud_ex" />
+          <extra_arg name="use_intra_process_comms" value="false" />
+        </composable_node>
+
+        <!-- pointcloud_preprocessor::RingOutlierFilterComponent -->
+        <composable_node pkg="pointcloud_preprocessor" plugin="pointcloud_preprocessor::RingOutlierFilterComponent" name="ring_outlier_filter" namespace="">
+          <remap from="input" to="rectified/pointcloud_ex" />
+          <remap from="output" to="outlier_filtered/pointcloud" />
+          <extra_arg name="use_intra_process_comms" value="false" />
+        </composable_node>
+
+      </node_container>
+
+    </group> <!-- lidar/top -->
+
+    <!-- IMU Driver -->
+    <group>
+      <push-ros-namespace namespace="imu"/>
+
+      <!-- imu_corrector -->
+      <node name="imu_corrector" pkg="imu_corrector" exec="imu_corrector">
+        <remap from="input" to="tamagawa/imu_raw"/>
+        <remap from="output" to="imu_data"/>
+        <param from="$(find-pkg-share imu_corrector)/config/imu_corrector.param.yaml"/>
+      </node>
+
+    </group> <!-- imu -->
+
+    <!-- Vehicle Velocity Converter -->
+    <group>
+
+      <!-- vehicle_velocity_converter -->
+      <node pkg="vehicle_velocity_converter" exec="vehicle_velocity_converter" name="vehicle_velocity_converter_node" output="screen">
+        <param from="$(find-pkg-share vehicle_velocity_converter)/config/vehicle_velocity_converter.param.yaml"/>
+        <remap from="velocity_status" to="/vehicle/status/velocity_status"/>
+        <remap from="twist_with_covariance" to="/sensing/vehicle_velocity_converter/twist_with_covariance"/>
+      </node>
+
+    </group>
+
+  </group> <!-- sensing -->
+
+  <!-- Localization -->
+
+  <!-- Perception -->
+
+  <!-- Planning -->
+
+  <!-- Control -->
+
+  <!-- Rviz2 -->
+  <group>
+    <node pkg="rviz2" exec="rviz2" name="rviz2" output="screen" args="-d $(var rviz_config) -s $(find-pkg-share autoware_launch)/rviz/image/autoware.png" />
+  </group>
+
+
+</launch>
